@@ -1,0 +1,1 @@
+{"name":"wow-helper-api","version":"2.2.0","main":"server.cjs","scripts":{"start":"node server.cjs"}}
