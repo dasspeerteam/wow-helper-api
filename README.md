@@ -1,6 +1,6 @@
 # 🎮 WoW Helper API
 
-Backend-Service für den [WoW Retail Helper](https://flxtygp36djy6.ok.kimi.link) - ein Tool für BiS-Gear, Talentbäume und Live-Daten für World of Warcraft Retail.
+Backend-Service für den [WoW Retail Helper](https://flxtygp36djy6.ok.kimi.link) - ein Tool für BiS-Gear, Talentbäume und Live-Daten für World of Warcraft Retail. 19-50
 
 ## Features
 
