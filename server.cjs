@@ -3,7 +3,7 @@ const https = require('https');
 const url = require('url');
 
 // ============================================
-// DEBUG: Umgebungsvariablen ausgeben
+// DEBUG: Umgebungsvariablen  ausgeben
 // ============================================
 console.log('=== SERVER START ===');
 console.log('WCL_CLIENT_ID:', process.env.WCL_CLIENT_ID ? 'VORHANDEN (Länge: ' + process.env.WCL_CLIENT_ID.length + ')' : 'NICHT GEFUNDEN');
@@ -341,3 +341,4 @@ server.listen(PORT, () => {
   console.log(`🚀 WoW Helper API Server läuft auf Port ${PORT}`);
   console.log(`📊 Health Check: http://localhost:${PORT}/health`);
 });
+
