@@ -7,7 +7,7 @@ const url = require('url');
 // ============================================
 console.log('=== SERVER START ===');
 const clientId = process.env.WCL_CLIENT_ID || 'a13081ff-037a-4d7d-8857-0cedb82e729f';
-const clientSecret = process.env.WCL_CLIENT_SECRET || 'a13081ff-037a-4d7d-8857-0cedb82e729f';
+const clientSecret = process.env.WCL_CLIENT_SECRET || 'TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT';
 console.log('NODE_ENV:', process.env.NODE_ENV || 'nicht gesetzt');
 console.log('PORT:', process.env.PORT || 'nicht gesetzt (default: 3000)');
 console.log('===================');
@@ -341,6 +341,7 @@ server.listen(PORT, () => {
   console.log(`🚀 WoW Helper API Server läuft auf Port ${PORT}`);
   console.log(`📊 Health Check: http://localhost:${PORT}/health`);
 });
+
 
 
 
