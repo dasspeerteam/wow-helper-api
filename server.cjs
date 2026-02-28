@@ -1,259 +1,343 @@
-#!/usr/bin/env node
-/**
- * WoW Helper API Server - WoW: Midnight Edition
- * Patch 12.0.1 - Mit Warcraft Logs API
- */
-
 const http = require('http');
-const url = require('url');
 const https = require('https');
+const url = require('url');
 
-const PORT = process.env.PORT || 3001;
+// ============================================
+// DEBUG: Umgebungsvariablen ausgeben
+// ============================================
+console.log('=== SERVER START ===');
+console.log('WCL_CLIENT_ID:', process.env.WCL_CLIENT_ID ? 'VORHANDEN (Länge: ' + process.env.WCL_CLIENT_ID.length + ')' : 'NICHT GEFUNDEN');
+console.log('WCL_CLIENT_SECRET:', process.env.WCL_CLIENT_SECRET ? 'VORHANDEN (Länge: ' + process.env.WCL_CLIENT_SECRET.length + ')' : 'NICHT GEFUNDEN');
+console.log('NODE_ENV:', process.env.NODE_ENV || 'nicht gesetzt');
+console.log('PORT:', process.env.PORT || 'nicht gesetzt (default: 3000)');
+console.log('===================');
 
-// DEBUG: Zeige alle Umgebungsvariablen
-console.log('=== ENVIRONMENT VARIABLES ===');
-console.log('WCL_CLIENT_ID:', process.env.WCL_CLIENT_ID ? 'VORHANDEN' : 'FEHLT');
-console.log('WCL_CLIENT_SECRET:', process.env.WCL_CLIENT_SECRET ? 'VORHANDEN' : 'FEHLT');
-console.log('PORT:', process.env.PORT);
-console.log('=============================');
+// Cache für Warcraft Logs Token
+let wclToken = null;
+let wclTokenExpiry = null;
 
-// Warcraft Logs API Konfiguration
-const WCL_CLIENT_ID = process.env.WCL_CLIENT_ID;
-const WCL_CLIENT_SECRET = process.env.WCL_CLIENT_SECRET;
-const HAS_WCL = !!(WCL_CLIENT_ID && WCL_CLIENT_SECRET);
-
-// Spec-Mapping
-const SPEC_MAPPING = {
-    'frost_dk': { class: 'DeathKnight', spec: 'Frost', tier: 'C' },
-    'unholy': { class: 'DeathKnight', spec: 'Unholy', tier: 'A' },
-    'havoc': { class: 'DemonHunter', spec: 'Havoc', tier: 'B' },
-    'devourer': { class: 'DemonHunter', spec: 'Devourer', tier: 'A+' },
-    'balance': { class: 'Druid', spec: 'Balance', tier: 'B' },
-    'feral': { class: 'Druid', spec: 'Feral', tier: 'A' },
-    'augmentation': { class: 'Evoker', spec: 'Augmentation', tier: 'S' },
-    'devastation': { class: 'Evoker', spec: 'Devastation', tier: 'A+' },
-    'beast_mastery': { class: 'Hunter', spec: 'BeastMastery', tier: 'A' },
-    'marksmanship': { class: 'Hunter', spec: 'Marksmanship', tier: 'A' },
-    'survival': { class: 'Hunter', spec: 'Survival', tier: 'A+' },
-    'arcane': { class: 'Mage', spec: 'Arcane', tier: 'S' },
-    'fire': { class: 'Mage', spec: 'Fire', tier: 'B' },
-    'frost_mage': { class: 'Mage', spec: 'Frost', tier: 'S' },
-    'windwalker': { class: 'Monk', spec: 'Windwalker', tier: 'A' },
-    'retribution': { class: 'Paladin', spec: 'Retribution', tier: 'C' },
-    'shadow': { class: 'Priest', spec: 'Shadow', tier: 'A' },
-    'assassination': { class: 'Rogue', spec: 'Assassination', tier: 'A' },
-    'outlaw': { class: 'Rogue', spec: 'Outlaw', tier: 'A+' },
-    'subtlety': { class: 'Rogue', spec: 'Subtlety', tier: 'A' },
-    'elemental': { class: 'Shaman', spec: 'Elemental', tier: 'A+' },
-    'enhancement': { class: 'Shaman', spec: 'Enhancement', tier: 'A' },
-    'affliction': { class: 'Warlock', spec: 'Affliction', tier: 'A+' },
-    'demonology': { class: 'Warlock', spec: 'Demonology', tier: 'S' },
-    'destruction': { class: 'Warlock', spec: 'Destruction', tier: 'B' },
-    'arms': { class: 'Warrior', spec: 'Arms', tier: 'B' },
-    'fury': { class: 'Warrior', spec: 'Fury', tier: 'A+' },
+// Cache für Daten (5 Minuten)
+let dataCache = {
+  rankings: null,
+  trinkets: null,
+  lastUpdate: null
 };
 
-// Lokale DPS-Daten
-const DPS_DATA = {
-    'Demonology': { dps: 1250000, rank: 1, percentile: 99 },
-    'Arcane': { dps: 1230000, rank: 2, percentile: 98 },
-    'Frost': { dps: 1220000, rank: 3, percentile: 97 },
-    'Augmentation': { dps: 1180000, rank: 4, percentile: 95 },
-    'Devastation': { dps: 1150000, rank: 5, percentile: 92 },
-    'Affliction': { dps: 1140000, rank: 6, percentile: 90 },
-    'Devourer': { dps: 1130000, rank: 7, percentile: 88 },
-    'Outlaw': { dps: 1120000, rank: 8, percentile: 86 },
-    'Elemental': { dps: 1110000, rank: 9, percentile: 84 },
-    'Survival': { dps: 1100000, rank: 10, percentile: 82 },
-    'Fury': { dps: 1090000, rank: 11, percentile: 80 },
-    'BeastMastery': { dps: 1070000, rank: 12, percentile: 75 },
-    'Marksmanship': { dps: 1060000, rank: 13, percentile: 72 },
-    'Feral': { dps: 1050000, rank: 14, percentile: 70 },
-    'Shadow': { dps: 1040000, rank: 15, percentile: 68 },
-    'Unholy': { dps: 1030000, rank: 16, percentile: 65 },
-    'Subtlety': { dps: 1020000, rank: 17, percentile: 62 },
-    'Enhancement': { dps: 1010000, rank: 18, percentile: 60 },
-    'Assassination': { dps: 1000000, rank: 19, percentile: 58 },
-    'Windwalker': { dps: 990000, rank: 20, percentile: 55 },
-    'Balance': { dps: 970000, rank: 21, percentile: 50 },
-    'Destruction': { dps: 960000, rank: 22, percentile: 48 },
-    'Arms': { dps: 950000, rank: 23, percentile: 45 },
-    'Fire': { dps: 940000, rank: 24, percentile: 42 },
-    'Havoc': { dps: 930000, rank: 25, percentile: 40 },
-    'Retribution': { dps: 900000, rank: 26, percentile: 35 },
+const CACHE_DURATION = 5 * 60 * 1000; // 5 Minuten
+
+// CORS Headers
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Content-Type': 'application/json'
 };
 
-const cache = new Map();
-const CACHE_TTL = 5 * 60 * 1000;
-
-function getCached(key) {
-    const cached = cache.get(key);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        return cached.data;
-    }
-    cache.delete(key);
+// Warcraft Logs OAuth Token abrufen
+async function getWarcraftLogsToken() {
+  const clientId = process.env.WCL_CLIENT_ID;
+  const clientSecret = process.env.WCL_CLIENT_SECRET;
+  
+  // Debug-Ausgabe
+  console.log('getWarcraftLogsToken aufgerufen');
+  console.log('clientId verfügbar:', !!clientId);
+  console.log('clientSecret verfügbar:', !!clientSecret);
+  
+  if (!clientId || !clientSecret) {
+    console.log('FEHLER: WCL Credentials nicht gesetzt!');
     return null;
-}
+  }
 
-function setCached(key, data) {
-    cache.set(key, { data, timestamp: Date.now() });
-}
+  // Prüfe ob Token noch gültig
+  if (wclToken && wclTokenExpiry && Date.now() < wclTokenExpiry) {
+    console.log('Verwende gecachtes Token');
+    return wclToken;
+  }
 
-function generateRankings(className, specName, tier) {
-    const data = DPS_DATA[specName] || { dps: 950000, rank: 15, percentile: 50 };
-    const variance = (Math.random() - 0.5) * 0.02;
-    const dps = Math.round(data.dps * (1 + variance));
+  console.log('Hole neues WCL Token...');
+
+  return new Promise((resolve, reject) => {
+    const postData = `grant_type=client_credentials`;
     
-    return {
-        rank: data.rank,
-        outOf: 26,
-        total: 26,
-        class: className,
-        spec: specName,
-        dps: dps,
-        averageDps: Math.round(dps * 0.75),
-        percentile: data.percentile,
-        tier: tier,
-        sampleSize: Math.floor(Math.random() * 5000) + 8000,
-        lastUpdated: new Date().toISOString(),
-        source: HAS_WCL ? 'warcraftlogs-ptr' : 'local-data',
-        patch: '12.0.1',
-        expansion: 'Midnight'
+    const options = {
+      hostname: 'www.warcraftlogs.com',
+      path: '/oauth/token',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': 'Basic ' + Buffer.from(`${clientId}:${clientSecret}`).toString('base64'),
+        'Content-Length': Buffer.byteLength(postData)
+      }
     };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        try {
+          console.log('WCL Token Response Status:', res.statusCode);
+          const response = JSON.parse(data);
+          
+          if (response.access_token) {
+            wclToken = response.access_token;
+            wclTokenExpiry = Date.now() + (response.expires_in * 1000);
+            console.log('WCL Token erfolgreich erhalten!');
+            resolve(wclToken);
+          } else {
+            console.log('WCL Token Fehler:', response);
+            resolve(null);
+          }
+        } catch (e) {
+          console.error('Fehler beim Parsen der WCL Antwort:', e);
+          resolve(null);
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      console.error('WCL Token Request Fehler:', err);
+      resolve(null);
+    });
+
+    req.write(postData);
+    req.end();
+  });
 }
 
-function getTrinkets() {
-    return {
-        trinkets: [
-            { name: 'House of Cards', itemLevel: 678, dps: 68500, source: 'The MOTHERLODE!!' },
-            { name: 'Mekgines Salty Seabrew', itemLevel: 678, dps: 67200, source: 'Liberation of Undermine' },
-            { name: 'Signet of the Priory', itemLevel: 678, dps: 65800, source: 'Priory of the Sacred Flame' },
-            { name: 'Eye of Kezan', itemLevel: 678, dps: 64500, source: 'Liberation of Undermine' },
-            { name: 'Ara-Kara Sacrifice', itemLevel: 678, dps: 63200, source: 'Ara-Kara' },
-            { name: 'Cirral Concoctory', itemLevel: 678, dps: 62100, source: 'Cinderbrew Meadery' },
-            { name: 'Mists Sacrifice', itemLevel: 678, dps: 61500, source: 'Mists of Tirna Scithe' },
-            { name: 'Ragefeather Reborn', itemLevel: 678, dps: 60800, source: 'Nokhud Offensive' },
-        ],
-        updated: new Date().toISOString()
+// GraphQL Query an Warcraft Logs senden
+async function queryWarcraftLogs(query, variables = {}) {
+  const token = await getWarcraftLogsToken();
+  
+  if (!token) {
+    console.log('Kein WCL Token verfügbar, verwende Fallback-Daten');
+    return null;
+  }
+
+  console.log('Sende GraphQL Query...');
+
+  return new Promise((resolve, reject) => {
+    const postData = JSON.stringify({ query, variables });
+    
+    const options = {
+      hostname: 'www.warcraftlogs.com',
+      path: '/api/v2/client',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'Content-Length': Buffer.byteLength(postData)
+      }
     };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        try {
+          console.log('WCL GraphQL Response Status:', res.statusCode);
+          const response = JSON.parse(data);
+          
+          if (response.errors) {
+            console.log('WCL GraphQL Fehler:', response.errors);
+            resolve(null);
+          } else {
+            console.log('WCL GraphQL erfolgreich!');
+            resolve(response.data);
+          }
+        } catch (e) {
+          console.error('Fehler beim Parsen der GraphQL Antwort:', e);
+          resolve(null);
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      console.error('WCL GraphQL Request Fehler:', err);
+      resolve(null);
+    });
+
+    req.write(postData);
+    req.end();
+  });
 }
 
-function setCORSHeaders(res) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.setHeader('Content-Type', 'application/json');
+// DPS Rankings von Warcraft Logs abrufen
+async function getRankingsFromWCL() {
+  const query = `
+    query getRankings {
+      worldData {
+        encounter(id: 3009) {
+          rankings(
+            difficulty: 5
+            metric: dps
+            timeframe: Today
+            className: "Any"
+          )
+        }
+      }
+    }
+  `;
+  
+  const data = await queryWarcraftLogs(query);
+  return data?.worldData?.encounter?.rankings;
 }
 
-const server = http.createServer((req, res) => {
-    setCORSHeaders(res);
+// Fallback-Daten (wenn WCL nicht verfügbar)
+const fallbackRankings = {
+  'Death Knight - Blood': { dps: 1850000, tier: 'A', confidence: 'high' },
+  'Death Knight - Frost': { dps: 2350000, tier: 'S', confidence: 'high' },
+  'Death Knight - Unholy': { dps: 2280000, tier: 'S', confidence: 'high' },
+  'Demon Hunter - Havoc': { dps: 2420000, tier: 'S', confidence: 'high' },
+  'Demon Hunter - Vengeance': { dps: 1650000, tier: 'B', confidence: 'medium' },
+  'Druid - Balance': { dps: 2180000, tier: 'A', confidence: 'high' },
+  'Druid - Feral': { dps: 2050000, tier: 'A', confidence: 'high' },
+  'Druid - Guardian': { dps: 1420000, tier: 'C', confidence: 'medium' },
+  'Evoker - Devastation': { dps: 2250000, tier: 'S', confidence: 'high' },
+  'Evoker - Augmentation': { dps: 1850000, tier: 'A', confidence: 'high' },
+  'Hunter - Beast Mastery': { dps: 1980000, tier: 'A', confidence: 'high' },
+  'Hunter - Marksmanship': { dps: 2120000, tier: 'A', confidence: 'high' },
+  'Hunter - Survival': { dps: 1920000, tier: 'B', confidence: 'medium' },
+  'Mage - Arcane': { dps: 2380000, tier: 'S', confidence: 'high' },
+  'Mage - Fire': { dps: 2320000, tier: 'S', confidence: 'high' },
+  'Mage - Frost': { dps: 2080000, tier: 'A', confidence: 'high' },
+  'Monk - Brewmaster': { dps: 1480000, tier: 'C', confidence: 'medium' },
+  'Monk - Windwalker': { dps: 2150000, tier: 'A', confidence: 'high' },
+  'Paladin - Protection': { dps: 1380000, tier: 'C', confidence: 'medium' },
+  'Paladin - Retribution': { dps: 2200000, tier: 'A', confidence: 'high' },
+  'Priest - Shadow': { dps: 2100000, tier: 'A', confidence: 'high' },
+  'Rogue - Assassination': { dps: 2300000, tier: 'S', confidence: 'high' },
+  'Rogue - Outlaw': { dps: 2000000, tier: 'A', confidence: 'high' },
+  'Rogue - Subtlety': { dps: 1950000, tier: 'B', confidence: 'medium' },
+  'Shaman - Elemental': { dps: 2180000, tier: 'A', confidence: 'high' },
+  'Shaman - Enhancement': { dps: 2050000, tier: 'A', confidence: 'high' },
+  'Warlock - Affliction': { dps: 1980000, tier: 'A', confidence: 'high' },
+  'Warlock - Demonology': { dps: 2250000, tier: 'S', confidence: 'high' },
+  'Warlock - Destruction': { dps: 2150000, tier: 'A', confidence: 'high' },
+  'Warrior - Arms': { dps: 2080000, tier: 'A', confidence: 'high' },
+  'Warrior - Fury': { dps: 2020000, tier: 'A', confidence: 'high' },
+  'Warrior - Protection': { dps: 1350000, tier: 'C', confidence: 'medium' }
+};
+
+const fallbackTrinkets = [
+  { id: 1, name: 'Trinket A', source: 'Dungeon', value: 100 },
+  { id: 2, name: 'Trinket B', source: 'Raid', value: 95 },
+  { id: 3, name: 'Trinket C', source: 'Crafted', value: 90 }
+];
+
+// Server erstellen
+const server = http.createServer(async (req, res) => {
+  const parsedUrl = url.parse(req.url, true);
+  const path = parsedUrl.pathname;
+  const method = req.method;
+
+  console.log(`${new Date().toISOString()} - ${method} ${path}`);
+
+  // CORS Preflight
+  if (method === 'OPTIONS') {
+    res.writeHead(200, corsHeaders);
+    res.end();
+    return;
+  }
+
+  // Health Check
+  if (path === '/health' || path === '/') {
+    const clientId = process.env.WCL_CLIENT_ID;
+    const clientSecret = process.env.WCL_CLIENT_SECRET;
     
-    if (req.method === 'OPTIONS') {
-        res.writeHead(200);
-        res.end();
-        return;
+    // Teste WCL Verbindung
+    let wclConnected = false;
+    if (clientId && clientSecret) {
+      const token = await getWarcraftLogsToken();
+      wclConnected = !!token;
     }
     
-    const parsedUrl = url.parse(req.url, true);
-    const path = parsedUrl.pathname;
-    
-    console.log(`${new Date().toISOString()} - ${req.method} ${path}`);
-    
-    if (path === '/api/health') {
-        res.writeHead(200);
-        res.end(JSON.stringify({
-            status: 'ok',
-            timestamp: new Date().toISOString(),
-            version: '3.1.0',
-            expansion: 'Midnight',
-            patch: '12.0.1',
-            specs_available: Object.keys(SPEC_MAPPING).length,
-            warcraft_logs_connected: HAS_WCL,
-            data_source: HAS_WCL ? 'warcraftlogs-ptr' : 'local-data'
-        }));
-        return;
+    res.writeHead(200, corsHeaders);
+    res.end(JSON.stringify({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      warcraft_logs_connected: wclConnected,
+      env_vars_set: {
+        client_id: !!clientId,
+        client_secret: !!clientSecret
+      },
+      cache_last_update: dataCache.lastUpdate
+    }));
+    return;
+  }
+
+  // API Routes
+  if (path === '/api/rankings') {
+    // Prüfe Cache
+    const now = Date.now();
+    if (dataCache.rankings && dataCache.lastUpdate && (now - dataCache.lastUpdate) < CACHE_DURATION) {
+      console.log('Verwende gecachte Rankings');
+      res.writeHead(200, corsHeaders);
+      res.end(JSON.stringify({
+        source: 'cache',
+        lastUpdate: dataCache.lastUpdate,
+        data: dataCache.rankings
+      }));
+      return;
     }
+
+    // Versuche WCL Daten zu holen
+    console.log('Versuche WCL Rankings zu holen...');
+    const wclData = await getRankingsFromWCL();
     
-    if (path === '/api/rankings') {
-        const cacheKey = 'all_rankings';
-        const cached = getCached(cacheKey);
-        
-        if (cached) {
-            res.writeHead(200);
-            res.end(JSON.stringify(cached));
-            return;
-        }
-        
-        const results = {};
-        for (const [specId, specData] of Object.entries(SPEC_MAPPING)) {
-            results[specId] = generateRankings(specData.class, specData.spec, specData.tier);
-        }
-        
-        setCached(cacheKey, results);
-        res.writeHead(200);
-        res.end(JSON.stringify(results));
-        return;
+    if (wclData) {
+      console.log('WCL Rankings erfolgreich!');
+      dataCache.rankings = wclData;
+      dataCache.lastUpdate = now;
+      
+      res.writeHead(200, corsHeaders);
+      res.end(JSON.stringify({
+        source: 'warcraftlogs',
+        lastUpdate: now,
+        data: wclData
+      }));
+    } else {
+      console.log('Verwende Fallback-Rankings');
+      res.writeHead(200, corsHeaders);
+      res.end(JSON.stringify({
+        source: 'fallback',
+        lastUpdate: now,
+        data: fallbackRankings
+      }));
     }
+    return;
+  }
+
+  if (path === '/api/trinkets') {
+    res.writeHead(200, corsHeaders);
+    res.end(JSON.stringify({
+      source: 'fallback',
+      data: fallbackTrinkets
+    }));
+    return;
+  }
+
+  if (path === '/api/stats') {
+    const clientId = process.env.WCL_CLIENT_ID;
+    const clientSecret = process.env.WCL_CLIENT_SECRET;
     
-    const rankingsMatch = path.match(/^\/api\/rankings\/(.+)$/);
-    if (rankingsMatch) {
-        const specId = rankingsMatch[1];
-        
-        if (!SPEC_MAPPING[specId]) {
-            res.writeHead(400);
-            res.end(JSON.stringify({ error: 'Unbekannte Spezialisierung' }));
-            return;
-        }
-        
-        const cacheKey = `rankings_${specId}`;
-        const cached = getCached(cacheKey);
-        
-        if (cached) {
-            res.writeHead(200);
-            res.end(JSON.stringify(cached));
-            return;
-        }
-        
-        const spec = SPEC_MAPPING[specId];
-        const rankings = generateRankings(spec.class, spec.spec, spec.tier);
-        
-        setCached(cacheKey, rankings);
-        res.writeHead(200);
-        res.end(JSON.stringify(rankings));
-        return;
-    }
-    
-    const trinketsMatch = path.match(/^\/api\/trinkets\/(.+)$/);
-    if (trinketsMatch) {
-        const specId = trinketsMatch[1];
-        
-        if (!SPEC_MAPPING[specId]) {
-            res.writeHead(400);
-            res.end(JSON.stringify({ error: 'Unbekannte Spezialisierung' }));
-            return;
-        }
-        
-        const cacheKey = `trinkets_${specId}`;
-        const cached = getCached(cacheKey);
-        
-        if (cached) {
-            res.writeHead(200);
-            res.end(JSON.stringify(cached));
-            return;
-        }
-        
-        const trinkets = getTrinkets();
-        setCached(cacheKey, trinkets);
-        res.writeHead(200);
-        res.end(JSON.stringify(trinkets));
-        return;
-    }
-    
-    res.writeHead(404);
-    res.end(JSON.stringify({ error: 'Nicht gefunden' }));
+    res.writeHead(200, corsHeaders);
+    res.end(JSON.stringify({
+      specs_tracked: 31,
+      last_data_update: dataCache.lastUpdate || new Date().toISOString(),
+      warcraft_logs_connected: !!(clientId && clientSecret),
+      cache_hits: dataCache.rankings ? 'active' : 'none'
+    }));
+    return;
+  }
+
+  // 404
+  res.writeHead(404, corsHeaders);
+  res.end(JSON.stringify({ error: 'Not found' }));
 });
 
+const PORT = process.env.PORT || 3000;
+
 server.listen(PORT, () => {
-    console.log(`Server läuft auf Port ${PORT}`);
-    console.log(`WCL Connected: ${HAS_WCL}`);
+  console.log(`🚀 WoW Helper API Server läuft auf Port ${PORT}`);
+  console.log(`📊 Health Check: http://localhost:${PORT}/health`);
 });
